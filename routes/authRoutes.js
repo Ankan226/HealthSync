@@ -1,6 +1,9 @@
+
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const nodemailer = require("nodemailer");
 
 const User = require("../models/user");
 const Doctor = require("../models/doctor");
@@ -20,7 +23,6 @@ const cleanFormData = (data) => {
 
   for (const [key, value] of Object.entries(data)) {
     const cleanKey = key.trim();
-
     cleaned[cleanKey] =
       typeof value === "string" ? value.trim() : value;
   }
@@ -126,6 +128,7 @@ router.post("/patient/register", async (req, res) => {
         createdAt: newUser.createdAt,
       },
     });
+
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({
@@ -166,7 +169,6 @@ router.post(
         consultationFee,
       } = cleanedData;
 
-      // Validate required fields
       if (
         !fullName ||
         !email ||
@@ -185,21 +187,18 @@ router.post(
         });
       }
 
-      // Validate uploaded license
       if (!req.file) {
         return res.status(400).json({
           message: "Medical license document is required.",
         });
       }
 
-      // Validate password
       if (typeof password !== "string" || password.length < 8) {
         return res.status(400).json({
           message: "Password must be at least 8 characters long.",
         });
       }
 
-      // Validate experience
       const experienceNumber = Number(experience);
 
       if (!Number.isFinite(experienceNumber) || experienceNumber < 0) {
@@ -208,7 +207,6 @@ router.post(
         });
       }
 
-      // Validate consultation fee
       const consultationFeeNumber = Number(consultationFee);
 
       if (
@@ -220,14 +218,13 @@ router.post(
         });
       }
 
-      // Normalize input
       const normalizedEmail = email.trim().toLowerCase();
       const normalizedName = fullName.trim();
       const normalizedPhone = phoneNumber.trim();
+
       const normalizedRegistrationNumber =
         medicalRegistrationNumber.trim();
 
-      // Check existing email
       const existingUser = await User.findOne({
         email: normalizedEmail,
       });
@@ -238,7 +235,6 @@ router.post(
         });
       }
 
-      // Check existing medical registration number
       const existingDoctor = await Doctor.findOne({
         medicalRegistrationNumber: normalizedRegistrationNumber,
       });
@@ -249,10 +245,8 @@ router.post(
         });
       }
 
-      // Hash password
       const passwordHash = await bcrypt.hash(password, 12);
 
-      // Create User account
       newUser = await User.create({
         fullName: normalizedName,
         email: normalizedEmail,
@@ -261,7 +255,6 @@ router.post(
         role: "doctor",
       });
 
-      // Create Doctor profile
       const newDoctor = await Doctor.create({
         userId: newUser._id,
         specialization: specialization.trim(),
@@ -286,6 +279,7 @@ router.post(
           verificationStatus: newDoctor.verificationStatus,
         },
       });
+
     } catch (error) {
       if (newUser) {
         await User.findByIdAndDelete(newUser._id);
@@ -348,7 +342,6 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Doctor verification check
     if (user.role === "doctor") {
       const doctor = await Doctor.findOne({
         userId: user._id,
@@ -401,6 +394,7 @@ router.post("/login", async (req, res) => {
         role: user.role,
       },
     });
+
   } catch (error) {
     console.error("Login error:", error.message);
 
@@ -411,7 +405,232 @@ router.post("/login", async (req, res) => {
 });
 
 // ==========================================
-// 4. GET LOGGED-IN USER PROFILE
+// 4. FORGOT PASSWORD
+// ==========================================
+
+router.post("/forgot-password", async (req, res) => {
+  let user;
+
+  try {
+    const { email } = req.body;
+
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({
+        message: "Please provide a valid email address.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailRegex.test(normalizedEmail)) {
+      return res.status(400).json({
+        message: "Please provide a valid email address.",
+      });
+    }
+
+    user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      return res.status(200).json({
+        message:
+          "If an account with that email exists, a password reset link has been sent.",
+      });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+
+    const hashedResetToken = crypto
+      .createHash("sha256")
+      .update(resetToken)
+      .digest("hex");
+
+    const resetTokenExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
+    // Update only reset-token fields.
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          resetPasswordToken: hashedResetToken,
+          resetPasswordExpires: resetTokenExpiry,
+        },
+      },
+      { runValidators: false }
+    );
+
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = Number(process.env.SMTP_PORT || 587);
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const emailFrom = process.env.EMAIL_FROM || smtpUser;
+    const frontendUrl = process.env.FRONTEND_URL;
+
+    if (!smtpHost || !smtpUser || !smtpPass || !emailFrom || !frontendUrl) {
+      throw new Error("Email configuration is incomplete in the .env file.");
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+    });
+
+    const resetLink =
+      `${frontendUrl.replace(/\/$/, "")}/reset-password?token=${resetToken}&email=${encodeURIComponent(
+        user.email
+      )}`;
+
+    const emailResult = await transporter.sendMail({
+      from: emailFrom,
+      to: user.email,
+      subject: "HealthSync - Password Reset",
+
+      text: `Hello ${user.fullName || "there"},
+
+We received a request to reset your HealthSync password.
+
+Open this link to create a new password:
+${resetLink}
+
+This link will expire in 10 minutes.
+
+If you did not request a password reset, you can ignore this email.
+
+HealthSync Team`,
+
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; line-height: 1.6;">
+          <h2>Reset your HealthSync password</h2>
+          <p>Hello ${user.fullName || "there"},</p>
+          <p>We received a request to reset your HealthSync password.</p>
+          <p>
+            <a href="${resetLink}"
+               style="display:inline-block;padding:12px 20px;background:#1769aa;color:#ffffff;text-decoration:none;border-radius:6px;">
+              Reset Password
+            </a>
+          </p>
+          <p>This link will expire in 10 minutes.</p>
+          <p>If you did not request this, you can safely ignore this email.</p>
+          <p>HealthSync Team</p>
+        </div>
+      `,
+    });
+
+    console.log(
+      "Password reset email accepted by SMTP server:",
+      emailResult.messageId
+    );
+
+    return res.status(200).json({
+      message: "Password reset email sent successfully.",
+    });
+
+  } catch (error) {
+    console.error("Forgot password error:", error);
+
+    if (user) {
+      await User.updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            resetPasswordToken: null,
+            resetPasswordExpires: null,
+          },
+        },
+        { runValidators: false }
+      ).catch((saveError) => {
+        console.error("Could not clear reset token:", saveError.message);
+      });
+    }
+
+    return res.status(500).json({
+      message: "Unable to send password reset email. Please try again later.",
+    });
+  }
+});
+
+// ==========================================
+// 5. RESET PASSWORD
+// ==========================================
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const { email, token, newPassword } = req.body;
+
+    if (
+      !email ||
+      typeof email !== "string" ||
+      !token ||
+      typeof token !== "string" ||
+      !newPassword ||
+      typeof newPassword !== "string"
+    ) {
+      return res.status(400).json({
+        message: "Email, reset token, and new password are required.",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        message: "New password must be at least 8 characters long.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const hashedResetToken = crypto
+      .createHash("sha256")
+      .update(token)
+      .digest("hex");
+
+    const user = await User.findOne({
+      email: normalizedEmail,
+      resetPasswordToken: hashedResetToken,
+      resetPasswordExpires: {
+        $gt: new Date(),
+      },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        message: "The password reset link is invalid or has expired.",
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          passwordHash,
+          resetPasswordToken: null,
+          resetPasswordExpires: null,
+        },
+      },
+      { runValidators: false }
+    );
+
+    return res.status(200).json({
+      message: "Password has been reset successfully. You can now log in.",
+    });
+
+  } catch (error) {
+    console.error("Reset password error:", error.message);
+
+    return res.status(500).json({
+      message: "Something went wrong while resetting the password.",
+    });
+  }
+});
+
+// ==========================================
+// 6. GET LOGGED-IN USER PROFILE
 // ==========================================
 
 router.get("/me", authMiddleware, async (req, res) => {
@@ -439,6 +658,7 @@ router.get("/me", authMiddleware, async (req, res) => {
         createdAt: user.createdAt,
       },
     });
+
   } catch (error) {
     console.error("Profile fetch error:", error.message);
 
@@ -449,7 +669,7 @@ router.get("/me", authMiddleware, async (req, res) => {
 });
 
 // ==========================================
-// 5. ADMIN: GET PENDING DOCTOR APPLICATIONS
+// 7. ADMIN: GET PENDING DOCTOR APPLICATIONS
 // ==========================================
 
 router.get(
@@ -469,6 +689,7 @@ router.get(
         total: pendingDoctors.length,
         doctors: pendingDoctors,
       });
+
     } catch (error) {
       console.error("Pending doctors error:", error.message);
 
@@ -480,7 +701,7 @@ router.get(
 );
 
 // ==========================================
-// 6. ADMIN: APPROVE DOCTOR APPLICATION
+// 8. ADMIN: APPROVE DOCTOR APPLICATION
 // ==========================================
 
 router.patch(
@@ -520,6 +741,7 @@ router.patch(
         message: "Doctor application approved successfully.",
         doctor,
       });
+
     } catch (error) {
       console.error("Approve doctor error:", error.message);
 
@@ -531,7 +753,7 @@ router.patch(
 );
 
 // ==========================================
-// 7. ADMIN: REJECT DOCTOR APPLICATION
+// 9. ADMIN: REJECT DOCTOR APPLICATION
 // ==========================================
 
 router.patch(
@@ -582,6 +804,7 @@ router.patch(
         message: "Doctor application rejected successfully.",
         doctor,
       });
+
     } catch (error) {
       console.error("Reject doctor error:", error.message);
 

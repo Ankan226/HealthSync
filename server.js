@@ -8,8 +8,10 @@ const doctorRoutes = require("./routes/doctorRoutes");
 const scheduleRoutes = require("./routes/scheduleRoutes");
 const appointmentRoutes = require("./routes/appointmentRoutes");
 const paymentWebhookRoutes = require("./routes/paymentWebhookRoutes");
+const prescriptionRoutes = require("./routes/prescriptionRoutes");
 
 const app = express();
+app.use("/api/prescriptions", prescriptionRoutes);
 
 // Razorpay webhook MUST come before express.json()
 app.use(
@@ -27,6 +29,11 @@ app.use("/api/doctor", doctorRoutes);
 app.use("/api/doctor/schedules", scheduleRoutes);
 app.use("/api/appointments", appointmentRoutes);
 
+// Health check – used by Render to verify the service is running
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 app.get("/api/message", (req, res) => {
   res.json({
     message: "Hello from the Healthsync backend!",
@@ -40,8 +47,9 @@ async function startServer() {
     console.log("Connected database:", mongoose.connection.name);
     console.log("MongoDB Atlas connected successfully!");
 
-    app.listen(process.env.PORT || 5000, () => {
-      console.log("Backend running on port 5000");
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Backend running on port ${PORT}`);
     });
   } catch (error) {
     console.error("MongoDB connection failed:", error.message);

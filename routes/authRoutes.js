@@ -229,10 +229,81 @@ router.post(
         email: normalizedEmail,
       });
 
+      // Handle re-registration if doctor was previously rejected
       if (existingUser) {
-        return res.status(409).json({
-          message: "Email is already registered.",
+        if (existingUser.role !== "doctor") {
+          return res.status(409).json({
+            message: "An account with this email already exists.",
+          });
+        }
+
+        const existingDoctor = await Doctor.findOne({
+          userId: existingUser._id,
         });
+
+        if (!existingDoctor) {
+          return res.status(409).json({
+            message: "Doctor profile not found for this email.",
+          });
+        }
+
+        if (existingDoctor.verificationStatus === "approved") {
+          return res.status(409).json({
+            message: "An approved doctor account already exists with this email. Please log in.",
+          });
+        }
+
+        if (existingDoctor.verificationStatus === "pending") {
+          return res.status(409).json({
+            message: "Your application is already submitted and awaiting admin verification.",
+          });
+        }
+
+        // If status is "rejected" -> Allow reapplication and overwrite details
+        if (existingDoctor.verificationStatus === "rejected") {
+          // Check if the registration number is taken by another doctor
+          const regNumberTaken = await Doctor.findOne({
+            medicalRegistrationNumber: normalizedRegistrationNumber,
+            _id: { $ne: existingDoctor._id },
+          });
+
+          if (regNumberTaken) {
+            return res.status(409).json({
+              message: "Medical registration number is already registered by another doctor.",
+            });
+          }
+
+          const passwordHash = await bcrypt.hash(password, 12);
+
+          existingUser.fullName = normalizedName;
+          existingUser.phoneNumber = normalizedPhone;
+          existingUser.passwordHash = passwordHash;
+          await existingUser.save();
+
+          existingDoctor.specialization = specialization.trim();
+          existingDoctor.qualification = qualification.trim();
+          existingDoctor.experience = experienceNumber;
+          existingDoctor.medicalRegistrationNumber = normalizedRegistrationNumber;
+          existingDoctor.licenseDocumentUrl = req.file.path || req.file.secure_url;
+          existingDoctor.consultationFee = consultationFeeNumber;
+          existingDoctor.verificationStatus = "pending";
+          existingDoctor.rejectionReason = null;
+          await existingDoctor.save();
+
+          return res.status(200).json({
+            message:
+              "Your updated application has been resubmitted successfully. It is now awaiting admin verification.",
+            doctor: {
+              userId: existingUser._id,
+              doctorId: existingDoctor._id,
+              fullName: existingUser.fullName,
+              email: existingUser.email,
+              role: existingUser.role,
+              consultationFee: existingDoctor.consultationFee,
+              verificationStatus: existingDoctor.verificationStatus,
+            },
+          });
+        }
       }
 
       const existingDoctor = await Doctor.findOne({
@@ -261,7 +332,7 @@ router.post(
         qualification: qualification.trim(),
         experience: experienceNumber,
         medicalRegistrationNumber: normalizedRegistrationNumber,
-        licenseDocumentUrl: req.file.path,
+        licenseDocumentUrl: req.file.path || req.file.secure_url,
         consultationFee: consultationFeeNumber,
         verificationStatus: "pending",
       });
@@ -361,7 +432,9 @@ router.post("/login", async (req, res) => {
 
       if (doctor.verificationStatus === "rejected") {
         return res.status(403).json({
-          message: "Your application has been rejected.",
+          message:
+            "Your application has been rejected. You can edit your details and reapply by submitting the registration form again.",
+          verificationStatus: "rejected",
           rejectionReason: doctor.rejectionReason,
         });
       }

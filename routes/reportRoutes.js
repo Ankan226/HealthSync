@@ -14,6 +14,12 @@ const authMiddleware = require("../middleware/authMiddleware");
 const doctorVerificationMiddleware = require("../middleware/doctorVerificationMiddleware");
 const upload = require("../middleware/uploadMiddleware");
 
+const cleanupLocalFile = (file) => {
+  if (file && file.path && !file.path.startsWith("http")) {
+    fs.unlink(file.path, () => {});
+  }
+};
+
 // ==========================================
 // 1. POST /api/reports/upload
 // Doctor uploads a report (image or PDF) for a patient
@@ -22,11 +28,22 @@ router.post(
   "/upload",
   authMiddleware,
   doctorVerificationMiddleware,
-  upload.single("reportFile"),
+  (req, res, next) => {
+    upload.single("reportFile")(req, res, (err) => {
+      if (err) {
+        console.error("Upload middleware error:", err);
+        return res.status(400).json({
+          message: err.message || "File upload failed.",
+          error: err.toString(),
+        });
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
       if (req.user.role !== "doctor") {
-        if (req.file) fs.unlink(req.file.path, () => {});
+        cleanupLocalFile(req.file);
         return res.status(403).json({
           message: "Only verified doctors can upload medical reports.",
         });
@@ -42,14 +59,14 @@ router.post(
       }
 
       if (!patientId || !mongoose.isValidObjectId(patientId)) {
-        fs.unlink(req.file.path, () => {});
+        cleanupLocalFile(req.file);
         return res.status(400).json({
           message: "A valid patientId is required.",
         });
       }
 
       if (!title || !title.trim()) {
-        fs.unlink(req.file.path, () => {});
+        cleanupLocalFile(req.file);
         return res.status(400).json({
           message: "Report title is required.",
         });
@@ -57,7 +74,7 @@ router.post(
 
       const patient = await User.findOne({ _id: patientId, role: "patient" });
       if (!patient) {
-        fs.unlink(req.file.path, () => {});
+        cleanupLocalFile(req.file);
         return res.status(404).json({
           message: "Patient not found.",
         });
@@ -66,7 +83,7 @@ router.post(
       let validAppointmentId = null;
       if (appointmentId) {
         if (!mongoose.isValidObjectId(appointmentId)) {
-          fs.unlink(req.file.path, () => {});
+          cleanupLocalFile(req.file);
           return res.status(400).json({
             message: "Invalid appointment ID.",
           });
@@ -97,10 +114,11 @@ router.post(
         report,
       });
     } catch (error) {
-      if (req.file) fs.unlink(req.file.path, () => {});
+      cleanupLocalFile(req.file);
       console.error("Report upload error:", error);
       return res.status(500).json({
         message: "Server error while uploading report.",
+        error: error.message,
       });
     }
   }

@@ -2,16 +2,15 @@ const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME?.trim(),
+  api_key: process.env.CLOUDINARY_API_KEY?.trim(),
+  api_secret: process.env.CLOUDINARY_API_SECRET?.trim(),
 });
 
 // Cloudinary storage engine for Multer
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: async (req, file) => {
-    // Determine folder based on route / file context
     let folderName = "healthsync/general";
     if (req.originalUrl && req.originalUrl.includes("doctor")) {
       folderName = "healthsync/doctor_licenses";
@@ -23,8 +22,7 @@ const storage = new CloudinaryStorage({
 
     return {
       folder: folderName,
-      resource_type: isPdf ? "raw" : "image",
-      public_id: `${Date.now()}-${Math.round(Math.random() * 1e9)}`,
+      resource_type: isPdf ? "raw" : "auto",
     };
   },
 });

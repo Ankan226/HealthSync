@@ -1,6 +1,6 @@
-
 const express = require("express");
 const mongoose = require("mongoose");
+const PDFDocument = require("pdfkit");
 
 const router = express.Router();
 
@@ -347,6 +347,336 @@ router.get("/my", authMiddleware, async (req, res) => {
     return res.status(500).json({
       message: "Server error while fetching prescriptions.",
     });
+  }
+});
+
+// ==========================================
+// GET /api/prescriptions/:id/pdf
+// Download prescription PDF
+// ==========================================
+
+router.get("/:id/pdf", authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({
+        message: "Invalid prescription ID.",
+      });
+    }
+
+    let query = { _id: id };
+
+    // Patient authorization
+    if (req.user.role === "patient") {
+      query.patientId = req.user.userId;
+      query.status = "issued";
+    }
+
+    // Doctor authorization
+    else if (req.user.role === "doctor") {
+      const doctor = await Doctor.findOne({
+        userId: req.user.userId,
+        verificationStatus: "approved",
+      });
+
+      if (!doctor) {
+        return res.status(403).json({
+          message: "Verified doctor account required.",
+        });
+      }
+
+      query.doctorId = doctor._id;
+    } else {
+      return res.status(403).json({
+        message: "You are not authorized to download this prescription.",
+      });
+    }
+
+    const prescription = await Prescription.findOne(query)
+      .populate("patientId", "fullName email phoneNumber")
+      .populate({
+        path: "doctorId",
+        select: "specialization qualification medicalRegistrationNumber userId",
+        populate: {
+          path: "userId",
+          select: "fullName email phoneNumber",
+        },
+      })
+      .populate("appointmentId", "appointmentDate startTime endTime");
+
+    if (!prescription) {
+      return res.status(404).json({
+        message: "Prescription not found.",
+      });
+    }
+
+    if (prescription.status !== "issued") {
+      return res.status(400).json({
+        message: "Only issued prescriptions can be downloaded.",
+      });
+    }
+
+    const doc = new PDFDocument({
+      size: "A4",
+      margin: 50,
+    });
+
+    const filename = `prescription-${prescription._id}.pdf`;
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename}"`
+    );
+
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(24).font("Helvetica-Bold");
+    doc.text("HealthSync", { align: "center" });
+
+    doc.fontSize(10).font("Helvetica");
+    doc.text("Digital Healthcare Prescription", {
+      align: "center",
+    });
+
+    doc.moveDown();
+
+    doc.moveTo(50, doc.y)
+      .lineTo(545, doc.y)
+      .stroke();
+
+    doc.moveDown();
+
+    // Doctor information
+    const doctorUser = prescription.doctorId?.userId;
+
+    doc.fontSize(14).font("Helvetica-Bold");
+    doc.text("Doctor Information");
+
+    doc.moveDown(0.5);
+
+    doc.fontSize(10).font("Helvetica");
+
+    doc.text(
+      `Doctor Name: ${doctorUser?.fullName || "N/A"}`
+    );
+
+    doc.text(
+      `Specialization: ${
+        prescription.doctorId?.specialization || "N/A"
+      }`
+    );
+
+    doc.text(
+      `Qualification: ${
+        prescription.doctorId?.qualification || "N/A"
+      }`
+    );
+
+    doc.text(
+      `Registration Number: ${
+        prescription.doctorId?.medicalRegistrationNumber || "N/A"
+      }`
+    );
+
+    doc.moveDown();
+
+    // Patient information
+    doc.fontSize(14).font("Helvetica-Bold");
+    doc.text("Patient Information");
+
+    doc.moveDown(0.5);
+
+    doc.fontSize(10).font("Helvetica");
+
+    doc.text(
+      `Patient Name: ${
+        prescription.patientId?.fullName || "N/A"
+      }`
+    );
+
+    doc.text(
+      `Patient Email: ${
+        prescription.patientId?.email || "N/A"
+      }`
+    );
+
+    doc.text(
+      `Patient Phone: ${
+        prescription.patientId?.phoneNumber || "N/A"
+      }`
+    );
+
+    doc.moveDown();
+
+    // Appointment information
+    doc.fontSize(14).font("Helvetica-Bold");
+    doc.text("Appointment Information");
+
+    doc.moveDown(0.5);
+
+    doc.fontSize(10).font("Helvetica");
+
+    const appointmentDate = prescription.appointmentId?.appointmentDate
+      ? new Date(
+          prescription.appointmentId.appointmentDate
+        ).toLocaleDateString("en-IN")
+      : "N/A";
+
+    doc.text(`Appointment Date: ${appointmentDate}`);
+
+    doc.text(
+      `Appointment Time: ${
+        prescription.appointmentId?.startTime || "N/A"
+      } - ${
+        prescription.appointmentId?.endTime || "N/A"
+      }`
+    );
+
+    doc.text(
+      `Prescription Issued: ${
+        prescription.issuedAt
+          ? new Date(prescription.issuedAt).toLocaleDateString("en-IN")
+          : "N/A"
+      }`
+    );
+
+    doc.moveDown();
+
+    // Symptoms
+    doc.fontSize(14).font("Helvetica-Bold");
+    doc.text("Symptoms");
+
+    doc.moveDown(0.5);
+
+    doc.fontSize(10).font("Helvetica");
+    doc.text(prescription.symptoms || "Not specified");
+
+    doc.moveDown();
+
+    // Diagnosis
+    doc.fontSize(14).font("Helvetica-Bold");
+    doc.text("Diagnosis");
+
+    doc.moveDown(0.5);
+
+    doc.fontSize(10).font("Helvetica");
+    doc.text(prescription.diagnosis || "N/A");
+
+    doc.moveDown();
+
+    // Medicines
+    doc.fontSize(14).font("Helvetica-Bold");
+    doc.text("Medicines");
+
+    doc.moveDown(0.5);
+
+    prescription.medicines.forEach((medicine, index) => {
+      doc.fontSize(11).font("Helvetica-Bold");
+
+      doc.text(
+        `${index + 1}. ${medicine.medicineName || "Medicine"}`
+      );
+
+      doc.fontSize(10).font("Helvetica");
+
+      if (medicine.strength) {
+        doc.text(`Strength: ${medicine.strength}`);
+      }
+
+      if (medicine.dosage) {
+        doc.text(`Dosage: ${medicine.dosage}`);
+      }
+
+      if (medicine.frequency) {
+        doc.text(`Frequency: ${medicine.frequency}`);
+      }
+
+      if (medicine.duration) {
+        doc.text(`Duration: ${medicine.duration}`);
+      }
+
+      if (medicine.route) {
+        doc.text(`Route: ${medicine.route}`);
+      }
+
+      if (medicine.quantity) {
+        doc.text(`Quantity: ${medicine.quantity}`);
+      }
+
+      if (medicine.instructions) {
+        doc.text(`Instructions: ${medicine.instructions}`);
+      }
+
+      doc.moveDown(0.5);
+    });
+
+    // Recommended tests
+    if (prescription.recommendedTests) {
+      doc.moveDown();
+
+      doc.fontSize(14).font("Helvetica-Bold");
+      doc.text("Recommended Tests");
+
+      doc.moveDown(0.5);
+
+      doc.fontSize(10).font("Helvetica");
+      doc.text(prescription.recommendedTests);
+    }
+
+    // Additional instructions
+    if (prescription.additionalInstructions) {
+      doc.moveDown();
+
+      doc.fontSize(14).font("Helvetica-Bold");
+      doc.text("Additional Instructions");
+
+      doc.moveDown(0.5);
+
+      doc.fontSize(10).font("Helvetica");
+      doc.text(prescription.additionalInstructions);
+    }
+
+    // Follow-up
+    if (prescription.followUpDate) {
+      doc.moveDown();
+
+      doc.fontSize(14).font("Helvetica-Bold");
+      doc.text("Follow-up");
+
+      doc.moveDown(0.5);
+
+      doc.fontSize(10).font("Helvetica");
+
+      doc.text(
+        new Date(prescription.followUpDate).toLocaleDateString("en-IN")
+      );
+    }
+
+    doc.moveDown(2);
+
+    doc.fontSize(9).font("Helvetica");
+    doc.text(
+      "This prescription was digitally generated through HealthSync.",
+      { align: "center" }
+    );
+
+    doc.text(
+      "Please consult your doctor if you have questions about your medication.",
+      { align: "center" }
+    );
+
+    doc.end();
+  } catch (error) {
+    console.error("Prescription PDF generation error:", error);
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: "Server error while generating prescription PDF.",
+      });
+    }
   }
 });
 

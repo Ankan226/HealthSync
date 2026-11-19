@@ -9,6 +9,7 @@ const scheduleRoutes = require("./routes/scheduleRoutes");
 const appointmentRoutes = require("./routes/appointmentRoutes");
 const paymentWebhookRoutes = require("./routes/paymentWebhookRoutes");
 const prescriptionRoutes = require("./routes/prescriptionRoutes");
+const reportRoutes = require("./routes/reportRoutes");
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.use("/api/doctor", doctorRoutes);
 app.use("/api/doctor/schedules", scheduleRoutes);
 app.use("/api/appointments", appointmentRoutes);
 app.use("/api/prescriptions", prescriptionRoutes);
+app.use("/api/reports", reportRoutes);
 
 // Health check – used by Render
 app.get("/health", (req, res) => {

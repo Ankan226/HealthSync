@@ -77,6 +77,8 @@ router.post(
         }
       }
 
+      const fileLocation = req.file.path || req.file.secure_url;
+
       const report = await MedicalReport.create({
         patientId: patient._id,
         doctorId: req.doctor._id,
@@ -84,10 +86,10 @@ router.post(
         title: title.trim(),
         description: description ? description.trim() : "",
         reportDate: reportDate ? new Date(reportDate) : new Date(),
-        filePath: req.file.path,
+        filePath: fileLocation,
         fileName: req.file.originalname,
         fileType: req.file.mimetype,
-        fileSize: req.file.size,
+        fileSize: req.file.size || 0,
       });
 
       return res.status(201).json({
@@ -290,6 +292,12 @@ router.get("/:id/view", authMiddleware, async (req, res) => {
       return res.status(403).json({ message: "Access denied." });
     }
 
+    // If stored on Cloudinary (starts with http/https)
+    if (report.filePath.startsWith("http://") || report.filePath.startsWith("https://")) {
+      return res.redirect(report.filePath);
+    }
+
+    // If stored locally
     const resolvedPath = path.resolve(report.filePath);
     if (!fs.existsSync(resolvedPath)) {
       return res.status(404).json({
@@ -346,6 +354,16 @@ router.get("/:id/download", authMiddleware, async (req, res) => {
       return res.status(403).json({ message: "Access denied." });
     }
 
+    // If stored on Cloudinary (starts with http/https)
+    if (report.filePath.startsWith("http://") || report.filePath.startsWith("https://")) {
+      // For Cloudinary attachments, add fl_attachment or redirect
+      const downloadUrl = report.filePath.includes("/upload/")
+        ? report.filePath.replace("/upload/", "/upload/fl_attachment/")
+        : report.filePath;
+      return res.redirect(downloadUrl);
+    }
+
+    // If stored locally
     const resolvedPath = path.resolve(report.filePath);
     if (!fs.existsSync(resolvedPath)) {
       return res.status(404).json({

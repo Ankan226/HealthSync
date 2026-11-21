@@ -2,30 +2,33 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-// Get the uploads folder path from the backend project
-const uploadPath = path.join(__dirname, "..", "uploads");
-console.log("UPLOAD FOLDER PATH:", uploadPath);
+let storage;
 
-// Create the folder automatically if it does not exist
-if (!fs.existsSync(uploadPath)) {
-  fs.mkdirSync(uploadPath, { recursive: true });
+// Use Cloudinary if credentials are configured
+if (
+  process.env.CLOUDINARY_CLOUD_NAME &&
+  process.env.CLOUDINARY_API_KEY &&
+  process.env.CLOUDINARY_API_SECRET
+) {
+  const { storage: cloudinaryStorage } = require("../config/cloudinary");
+  storage = cloudinaryStorage;
+} else {
+  // Local fallback storage
+  const uploadPath = path.join(__dirname, "..", "uploads");
+  if (!fs.existsSync(uploadPath)) {
+    fs.mkdirSync(uploadPath, { recursive: true });
+  }
+
+  storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, uploadPath);
+    },
+    filename: function (req, file, cb) {
+      const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      cb(null, uniqueName + path.extname(file.originalname).toLowerCase());
+    },
+  });
 }
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadPath);
-  },
-
-  filename: function (req, file, cb) {
-    const uniqueName =
-      Date.now() + "-" + Math.round(Math.random() * 1e9);
-
-    cb(
-      null,
-      uniqueName + path.extname(file.originalname).toLowerCase()
-    );
-  },
-});
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = ["image/jpeg", "image/png", "application/pdf"];
@@ -41,7 +44,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024,
+    fileSize: 10 * 1024 * 1024, // 10MB limit
   },
 });
 

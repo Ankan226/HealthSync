@@ -29,23 +29,35 @@ const userSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-dateOfBirth: {
-  type: Date,
-  required: function () {
-    return this.role === "patient";
-  },
-},
 
-   role: {
-  type: String,
-  enum: ["patient", "doctor", "admin"],
-  default: "patient",
-  required: true,
-},
+    dateOfBirth: {
+      type: Date,
+      required: function () {
+        return this.role === "patient";
+      },
+    },
+
+    role: {
+      type: String,
+      enum: ["patient", "doctor", "admin"],
+      default: "patient",
+      required: true,
+    },
 
     isActive: {
       type: Boolean,
       default: true,
+    },
+
+    // Forgot password fields
+    resetPasswordToken: {
+      type: String,
+      default: null,
+    },
+
+    resetPasswordExpires: {
+      type: Date,
+      default: null,
     },
   },
   {

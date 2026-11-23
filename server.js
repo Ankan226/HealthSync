@@ -11,6 +11,7 @@ const paymentWebhookRoutes = require("./routes/paymentWebhookRoutes");
 const prescriptionRoutes = require("./routes/prescriptionRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const aiRoutes = require("./routes/aiRoutes");
+const medicalSummaryRoutes = require("./routes/medicalSummaryRoutes");
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use("/api/appointments", appointmentRoutes);
 app.use("/api/prescriptions", prescriptionRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/medical-summary", medicalSummaryRoutes);
 
 // Health check – used by Render
 app.get("/health", (req, res) => {

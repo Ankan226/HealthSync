@@ -12,8 +12,8 @@ const SUPPORTED_LANGUAGES = ["English", "Hindi"];
 // ------------------------------------------
 
 const MAX_DOCUMENT_TEXT_LENGTH = 6000;
-const REPORT_OUTPUT_TOKENS = 480;
-const REPORT_TIMEOUT_MS = 300000;
+const REPORT_OUTPUT_TOKENS = 1000;
+const REPORT_TIMEOUT_MS = 60000;
 
 // ------------------------------------------
 // Medical Report AI System Prompt

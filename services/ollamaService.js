@@ -174,8 +174,44 @@ async function generateAgentResponse(prompt, system) {
   });
 }
 
-// Generate vector embeddings using EmbeddingGemma
+// Generate vector embeddings using Gemini Cloud (if key present) with fallback to local Ollama
 async function generateEmbedding(input) {
+  const text =
+    typeof input === "string"
+      ? input.trim()
+      : Array.isArray(input)
+      ? input[0]
+      : String(input);
+
+  // 1. Primary: Cloud Gemini Embeddings (768 Dimensions)
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const apiKey = process.env.GEMINI_API_KEY.trim();
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "models/gemini-embedding-001",
+          content: { parts: [{ text }] },
+          outputDimensionality: 768,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.embedding?.values) {
+          return [data.embedding.values];
+        }
+      }
+      console.warn("Gemini embedding returned non-OK status, falling back to Ollama...");
+    } catch (geminiError) {
+      console.warn("Gemini embedding failed:", geminiError.message);
+    }
+  }
+
+  // 2. Fallback: Local Ollama EmbeddingGemma
   try {
     const response = await fetch(`${OLLAMA_BASE_URL}/api/embed`, {
       method: "POST",
@@ -186,7 +222,7 @@ async function generateEmbedding(input) {
         model: MODELS.embedding,
         input,
       }),
-      signal: AbortSignal.timeout(120000), // 2-minute timeout
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) {

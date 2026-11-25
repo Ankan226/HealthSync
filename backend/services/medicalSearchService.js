@@ -88,7 +88,8 @@ async function searchMedicalKnowledge(question, limit = 5) {
       error.message
     );
 
-    throw error;
+    // Return empty results gracefully so RAG falls back to general guidance instead of crashing
+    return [];
   }
 }
 

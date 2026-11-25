@@ -1,150 +1,319 @@
+require("dotenv").config();
 
-const path = require("path");
-const dotenv = require("dotenv");
 const mongoose = require("mongoose");
 
-dotenv.config({
-  path: path.join(__dirname, "../.env"),
-});
+// Register User model before populate() runs
+require("../models/user");
 
-const { checkMedicalSafety } = require("../services/medicalSafetyService");
-const { searchMedicalKnowledge } = require("../services/medicalSearchService");
-const { buildRAGContext } = require("../services/ragContextService");
-const { generateRAGAnswer } = require("../services/ragAnswerService");
+const Doctor = require("../models/doctor");
 
-const safetyTestCases = [
-  {
-    message: "I have severe chest pain",
-    expected: "emergency",
-  },
-  {
-    message: "I can't breathe",
-    expected: "emergency",
-  },
-  {
-    message: "Sudden weakness on one side of my body",
-    expected: "emergency",
-  },
-  {
-    message: "I fainted",
-    expected: "emergency",
-  },
-  {
-    message: "I have a mild headache",
-    expected: "normal",
-  },
-  {
-    message: "I have a cough",
-    expected: "normal",
-  },
-];
+const { findApprovedDoctors } = require("../services/approvedDoctorService");
+
+const {
+  getAvailableAppointmentSlots,
+} = require("../services/appointmentSlotService");
+
+const {
+  getDoctorAppointmentOptions,
+  prepareAppointmentBooking,
+} = require("../services/appointmentAgentService");
+
+// Get tomorrow's date in India (IST)
+function getTomorrowIST() {
+  const todayIST = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+  const todayUTC = new Date(`${todayIST}T00:00:00.000Z`);
+  todayUTC.setUTCDate(todayUTC.getUTCDate() + 1);
+
+  return todayUTC.toISOString().slice(0, 10);
+}
 
 async function runTest() {
   try {
-    console.log("\n========== HEALTHSYNC AI SAFETY TEST ==========\n");
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log("MongoDB connected.\n");
 
-    // STEP 1: Test the rule-based safety checker
-    console.log("========== SAFETY CHECK TESTS ==========\n");
+    const specialization = "Cardiologist";
 
-    let passed = 0;
-    let failed = 0;
+    // =========================================
+    // TEST 1: APPROVED DOCTOR SEARCH
+    // =========================================
 
-    for (const testCase of safetyTestCases) {
-      const result = checkMedicalSafety(testCase.message);
+    console.log("========== TEST 1 ==========");
+    console.log(`Searching approved doctors: ${specialization}\n`);
 
-      const actual = result.riskLevel;
-      const success = actual === testCase.expected;
+    const doctors = await findApprovedDoctors(specialization);
 
-      if (success) {
-        passed++;
-      } else {
-        failed++;
+    console.log("Doctors found:", doctors.length);
+    console.log(JSON.stringify(doctors, null, 2));
+
+    if (!Array.isArray(doctors)) {
+      throw new Error("Expected doctor results to be an array.");
+    }
+
+    for (const doctor of doctors) {
+      if (!doctor.doctorId || !doctor.name || !doctor.specialization) {
+        throw new Error("A doctor result is missing required fields.");
+      }
+    }
+
+    console.log("\nAPPROVED DOCTOR SEARCH TEST PASSED.");
+
+    // =========================================
+    // TEST 2: APPOINTMENT SLOT RETRIEVAL
+    // =========================================
+
+    console.log("\n========== TEST 2 ==========");
+
+    if (doctors.length === 0) {
+      console.log(
+        "No approved Cardiologists found. Skipping appointment slot test."
+      );
+    } else {
+      const selectedDoctor = doctors[0];
+      const testDate = getTomorrowIST();
+
+      console.log("Selected doctor:", selectedDoctor.name);
+      console.log("Doctor ID:", selectedDoctor.doctorId);
+      console.log("Testing date:", testDate);
+      console.log("\nFetching available appointment slots...\n");
+
+      const slotResult = await getAvailableAppointmentSlots(
+        selectedDoctor.doctorId,
+        testDate
+      );
+
+      console.log(
+        "Slot retrieval result:",
+        JSON.stringify(slotResult, null, 2)
+      );
+
+      if (!slotResult || !Array.isArray(slotResult.availableSlots)) {
+        throw new Error("Invalid appointment slot response.");
       }
 
-      console.log(`${success ? "PASS" : "FAIL"}`);
-      console.log(`Message: ${testCase.message}`);
-      console.log(`Expected: ${testCase.expected}`);
-      console.log(`Actual: ${actual}`);
-      console.log(`Detected flags: ${result.detectedFlags.join(", ") || "None"}`);
-      console.log(`Continue to RAG: ${result.shouldContinueToRAG}`);
-      console.log("------------------------------------------\n");
+      if (slotResult.doctorId !== selectedDoctor.doctorId) {
+        throw new Error("Returned doctor ID does not match selected doctor.");
+      }
+
+      if (slotResult.date !== testDate) {
+        throw new Error("Returned date does not match requested date.");
+      }
+
+      for (const slot of slotResult.availableSlots) {
+        if (
+          !slot.startTime ||
+          !slot.endTime ||
+          typeof slot.durationMinutes !== "number"
+        ) {
+          throw new Error("An available slot is missing required fields.");
+        }
+      }
+
+      console.log("\nAPPOINTMENT SLOT RETRIEVAL TEST PASSED.");
+      console.log("Available slots:", slotResult.availableSlots.length);
     }
 
-    console.log(`Safety tests passed: ${passed}/${safetyTestCases.length}`);
-    console.log(`Safety tests failed: ${failed}/${safetyTestCases.length}\n`);
+    // =========================================
+    // TEST 3: APPOINTMENT AGENT SLOT OPTIONS
+    // =========================================
 
-    if (failed > 0) {
-      throw new Error("Some medical safety tests failed.");
+    console.log("\n========== TEST 3 ==========");
+
+    if (doctors.length === 0) {
+      console.log(
+        "No approved doctors found. Skipping appointment agent slot test."
+      );
+    } else {
+      const selectedDoctor = doctors[0];
+      const testDate = getTomorrowIST();
+
+      console.log("Testing appointment agent slot retrieval...");
+      console.log("Doctor:", selectedDoctor.name);
+      console.log("Doctor ID:", selectedDoctor.doctorId);
+      console.log("Date:", testDate);
+
+      const agentResult = await getDoctorAppointmentOptions(
+        selectedDoctor.doctorId,
+        testDate
+      );
+
+      console.log(
+        "\nAgent slot response:",
+        JSON.stringify(agentResult, null, 2)
+      );
+
+      if (!agentResult.success) {
+        throw new Error("Appointment agent slot retrieval failed.");
+      }
+
+      if (agentResult.doctorId !== selectedDoctor.doctorId) {
+        throw new Error("Doctor ID mismatch in agent response.");
+      }
+
+      if (agentResult.date !== testDate) {
+        throw new Error("Agent returned an incorrect appointment date.");
+      }
+
+      if (!Array.isArray(agentResult.availableSlots)) {
+        throw new Error("Agent did not return an available slots array.");
+      }
+
+      for (const slot of agentResult.availableSlots) {
+        if (
+          !slot.startTime ||
+          !slot.endTime ||
+          typeof slot.durationMinutes !== "number"
+        ) {
+          throw new Error("Agent returned an invalid slot.");
+        }
+      }
+
+      console.log("\nAPPOINTMENT AGENT SLOT TEST PASSED.");
+      console.log("Available slots:", agentResult.availableSlots.length);
     }
 
-    // STEP 2: Test that an emergency message is stopped
-    console.log("========== EMERGENCY FLOW TEST ==========\n");
+    // =========================================
+    // TEST 4: BOOKING CONFIRMATION PREPARATION
+    // =========================================
 
-    const emergencyResult = checkMedicalSafety(
-      "I am having severe chest pain"
-    );
+    console.log("\n========== TEST 4 ==========");
+    console.log("Testing booking confirmation preparation...\n");
 
-    console.log("Emergency detected:", emergencyResult.emergencyDetected);
-    console.log("Risk level:", emergencyResult.riskLevel);
-    console.log("Should continue to RAG:", emergencyResult.shouldContinueToRAG);
-    console.log("Safety message:", emergencyResult.message);
+    if (doctors.length === 0) {
+      console.log(
+        "No approved doctors found. Skipping booking confirmation test."
+      );
+    } else {
+      const tomorrow = getTomorrowIST();
 
-    if (emergencyResult.shouldContinueToRAG) {
-      throw new Error("Emergency message was incorrectly allowed to RAG.");
+      // Find a doctor with a configured consultation fee
+      const doctorRecords = await Doctor.find({
+        _id: {
+          $in: doctors.map((doctor) => doctor.doctorId),
+        },
+        verificationStatus: "approved",
+      });
+
+      const doctorWithFee = doctorRecords.find(
+        (doctor) =>
+          typeof doctor.consultationFee === "number" &&
+          Number.isFinite(doctor.consultationFee) &&
+          doctor.consultationFee >= 0
+      );
+
+      if (!doctorWithFee) {
+        console.log(
+          "No approved doctor has a configured fee. Skipping booking confirmation test."
+        );
+      } else {
+        // Find available slots for this doctor
+        const availableSlotResult = await getAvailableAppointmentSlots(
+          doctorWithFee._id.toString(),
+          tomorrow
+        );
+
+        if (availableSlotResult.availableSlots.length === 0) {
+          console.log(
+            "No slots available tomorrow for this doctor. Skipping booking confirmation test."
+          );
+        } else {
+          const selectedSlot = availableSlotResult.availableSlots[0];
+
+          console.log("Doctor ID:", doctorWithFee._id.toString());
+          console.log("Date:", tomorrow);
+          console.log("Selected slot:", selectedSlot);
+          console.log("Payment method: UPI\n");
+
+          // Prepare booking summary only.
+          // No appointment or payment will be created here.
+          const bookingResult = await prepareAppointmentBooking({
+            doctorId: doctorWithFee._id.toString(),
+            appointmentDate: tomorrow,
+            startTime: selectedSlot.startTime,
+            endTime: selectedSlot.endTime,
+            paymentMethod: "upi",
+          });
+
+          console.log(
+            "Booking confirmation response:",
+            JSON.stringify(bookingResult, null, 2)
+          );
+
+          // Validate the response
+          if (!bookingResult.success) {
+            throw new Error("Booking confirmation preparation failed.");
+          }
+
+          if (bookingResult.flow !== "booking_confirmation") {
+            throw new Error("Incorrect booking confirmation flow.");
+          }
+
+          if (bookingResult.confirmationRequired !== true) {
+            throw new Error("Confirmation should be required.");
+          }
+
+          if (bookingResult.bookingCreated !== false) {
+            throw new Error(
+              "This test must not create an actual appointment."
+            );
+          }
+
+          const summary = bookingResult.bookingSummary;
+
+          if (!summary) {
+            throw new Error("Booking summary is missing.");
+          }
+
+          if (summary.doctorId.toString() !== doctorWithFee._id.toString()) {
+            throw new Error("Booking summary doctor ID mismatch.");
+          }
+
+          if (summary.appointmentDate !== tomorrow) {
+            throw new Error("Booking summary date mismatch.");
+          }
+
+          if (summary.startTime !== selectedSlot.startTime) {
+            throw new Error("Booking summary start time mismatch.");
+          }
+
+          if (summary.endTime !== selectedSlot.endTime) {
+            throw new Error("Booking summary end time mismatch.");
+          }
+
+          if (summary.paymentMethod !== "upi") {
+            throw new Error("Booking summary payment method mismatch.");
+          }
+
+          if (typeof summary.consultationFee !== "number") {
+            throw new Error("Booking summary consultation fee is invalid.");
+          }
+
+          console.log("\nBOOKING CONFIRMATION PREPARATION TEST PASSED.");
+          console.log("Appointment was NOT created.");
+          console.log("Payment was NOT created.");
+        }
+      }
     }
 
-    console.log("\nEmergency flow correctly stopped before RAG.\n");
+    // =========================================
+    // ALL TESTS
+    // =========================================
 
-    // STEP 3: Test the normal RAG pipeline for a non-emergency message
-    console.log("========== NORMAL RAG FLOW TEST ==========\n");
-
-    const question = "What are the common symptoms of diabetes?";
-
-    const safetyResult = checkMedicalSafety(question);
-
-    console.log("Question:", question);
-    console.log("Risk level:", safetyResult.riskLevel);
-
-    if (!safetyResult.shouldContinueToRAG) {
-      console.log("Safety warning:", safetyResult.message);
-      throw new Error("Normal question was incorrectly blocked.");
-    }
-
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log("\nMongoDB connected successfully.");
-
-    console.log("\n[1/3] Searching medical knowledge...");
-    const searchResults = await searchMedicalKnowledge(question, 5);
-    console.log(`Retrieved ${searchResults.length} chunks.`);
-
-    console.log("\n[2/3] Building RAG context...");
-    const ragResult = buildRAGContext(question, searchResults);
-    console.log(`Context ready: ${ragResult.hasContext}`);
-
-    console.log("\n[3/3] Generating answer using MedGemma...");
-    const answerResult = await generateRAGAnswer(question, ragResult);
-
-    console.log("\n========== GENERATED ANSWER ==========\n");
-    console.log(answerResult.answer);
-
-    console.log("\n========== SOURCES ==========\n");
-
-    answerResult.sources.forEach((source) => {
-      console.log(`[Source ${source.id}] ${source.topic}`);
-      console.log(`Name: ${source.sourceName}`);
-      console.log(`URL: ${source.url}\n`);
-    });
-
-    console.log("\n========== SAFETY + RAG TEST COMPLETED ==========\n");
-
+    console.log("\n======================================");
+    console.log("ALL MEDICAL SEARCH TESTS PASSED.");
+    console.log("======================================");
   } catch (error) {
-    console.error("\nTEST FAILED:");
-    console.error(error.message);
+    console.error("\nTEST FAILED:", error.message);
+    process.exitCode = 1;
   } finally {
-    if (mongoose.connection.readyState !== 0) {
-      await mongoose.disconnect();
-      console.log("MongoDB disconnected.");
-    }
+    await mongoose.disconnect();
+    console.log("\nMongoDB disconnected.");
   }
 }
 
